@@ -1,0 +1,229 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { generateExamData } from './lib/examMaker';
+import { createDocx } from './lib/documentGenerator';
+import { Packer } from 'docx';
+import { saveAs } from 'file-saver';
+import * as XLSX from 'xlsx';
+import type { HistoryLog } from './lib/types';
+import './index.css';
+
+function App() {
+  const [historyLog, setHistoryLog] = useState<HistoryLog>({});
+  const [historyFileName, setHistoryFileName] = useState<string | null>(null);
+  const [excelData, setExcelData] = useState<Record<string, string[][]> | null>(null);
+  const [excelFileName, setExcelFileName] = useState<string | null>(null);
+  const [examStatus, setExamStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [errorMessage, setErrorMessage] = useState('');
+  const [generatedData, setGeneratedData] = useState<{ docxBlob: Blob, jsonBlob: Blob, totalQs: number } | null>(null);
+
+  const historyInputRef = useRef<HTMLInputElement>(null);
+  const excelInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const loadDefaultExcel = async () => {
+      try {
+        const response = await fetch(`${import.meta.env.BASE_URL}${encodeURIComponent('한국어문회 2급 준비.xlsx')}`);
+        if (!response.ok) return;
+        const arrayBuffer = await response.arrayBuffer();
+        const data = new Uint8Array(arrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        
+        const parsedData: Record<string, string[][]> = {};
+        for (const sheetName of workbook.SheetNames) {
+          const worksheet = workbook.Sheets[sheetName];
+          parsedData[sheetName] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+        }
+        
+        setExcelData(parsedData);
+        setExcelFileName("한국어문회 2급 준비.xlsx (기본 제공)");
+      } catch (err) {
+        console.error("기본 엑셀 파일 로드 실패:", err);
+      }
+    };
+    loadDefaultExcel();
+  }, []);
+
+  const handleHistoryUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const json = JSON.parse(event.target?.result as string);
+        setHistoryLog(json);
+        setHistoryFileName(file.name);
+      } catch (err) {
+        alert("잘못된 파일 형식입니다. 처음부터 다시 출제합니다.");
+        setHistoryLog({});
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleExcelUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const data = new Uint8Array(event.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        
+        const parsedData: Record<string, string[][]> = {};
+        for (const sheetName of workbook.SheetNames) {
+          const worksheet = workbook.Sheets[sheetName];
+          parsedData[sheetName] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+        }
+        
+        setExcelData(parsedData);
+        setExcelFileName(file.name);
+      } catch (err) {
+        alert("엑셀 파일 파싱 중 오류가 발생했습니다.");
+        setExcelData(null);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const handleGenerate = async () => {
+    if (!excelData) {
+      setErrorMessage("원본 문제 은행 엑셀 파일을 업로드해주세요.");
+      setExamStatus('error');
+      return;
+    }
+
+    setExamStatus('loading');
+    setErrorMessage('');
+    setGeneratedData(null);
+
+    try {
+      const { examData, updatedHistory } = await generateExamData(excelData, historyLog);
+
+      const totalItems = examData.reduce((acc, sec) => acc + sec.items.length, 0);
+      if (totalItems === 0) {
+        setErrorMessage("축하합니다! 문제 은행의 모든 문제를 다 푸셨습니다. 더 이상 새로운 문제가 없습니다.");
+        setExamStatus('error');
+        return;
+      }
+
+      const { doc, totalQs } = createDocx(examData);
+      const docxBlob = await Packer.toBlob(doc);
+      
+      const jsonBlob = new Blob([JSON.stringify(updatedHistory, null, 2)], { type: 'application/json' });
+
+      setGeneratedData({ docxBlob, jsonBlob, totalQs });
+      setExamStatus('success');
+
+    } catch (error: any) {
+      setErrorMessage(`오류가 발생했습니다: ${error.message}`);
+      setExamStatus('error');
+    }
+  };
+
+  const downloadDocx = () => {
+    if (!generatedData) return;
+    const dateStr = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 13);
+    saveAs(generatedData.docxBlob, `한자모의고사_${dateStr}.docx`);
+  };
+
+  const downloadJson = () => {
+    if (!generatedData) return;
+    saveAs(generatedData.jsonBlob, "exam_history.json");
+  };
+
+  return (
+    <div className="app-container">
+      <div className="glass-card">
+        <header className="header">
+          <h1>📝 2급 한자 모의고사 생성기</h1>
+          <p>
+            이곳은 개인 맞춤형 한자 모의고사를 만들어주는 시스템입니다.<br/>
+            <strong>기존에 풀었던 문제와 중복되지 않도록, 본인의 '세이브 파일(.json)'을 꼭 업로드해주세요!</strong>
+            <br/>(처음 오신 분은 업로드 없이 바로 '모의고사 생성 시작'을 누르시면 됩니다.)
+          </p>
+        </header>
+
+        <div className="content">
+          <div className="upload-container" onClick={() => excelInputRef.current?.click()} style={{ borderColor: excelFileName ? 'var(--primary-color)' : '' }}>
+            <input 
+              type="file" 
+              accept=".xlsx,.xls" 
+              ref={excelInputRef} 
+              onChange={handleExcelUpload} 
+              style={{ display: 'none' }} 
+            />
+            {excelFileName ? (
+              <div className="upload-success">
+                <span className="icon">📊</span>
+                <p>{excelFileName} 엑셀 로드 완료!</p>
+              </div>
+            ) : (
+              <div className="upload-prompt">
+                <span className="icon">📊</span>
+                <p>원본 문제 은행 엑셀 파일 (.xlsx) 업로드<br/><span style={{ color: "var(--error-color)", fontSize: "0.85rem" }}>*필수</span></p>
+              </div>
+            )}
+          </div>
+
+          <div className="upload-container" onClick={() => historyInputRef.current?.click()} style={{ opacity: 0.8 }}>
+            <input 
+              type="file" 
+              accept=".json" 
+              ref={historyInputRef} 
+              onChange={handleHistoryUpload} 
+              style={{ display: 'none' }} 
+            />
+            {historyFileName ? (
+              <div className="upload-success">
+                <span className="icon">📄</span>
+                <p>{historyFileName} 세이브 파일 로드 완료!</p>
+              </div>
+            ) : (
+              <div className="upload-prompt">
+                <span className="icon">📂</span>
+                <p>내 출제 기록 파일 (exam_history.json) 업로드<br/>(선택사항)</p>
+              </div>
+            )}
+          </div>
+
+          <button 
+            className={`generate-btn ${examStatus === 'loading' ? 'loading' : ''}`}
+            onClick={handleGenerate}
+            disabled={examStatus === 'loading'}
+          >
+            {examStatus === 'loading' ? '⏳ 생성 중...' : '🚀 모의고사 생성 시작'}
+          </button>
+
+          {examStatus === 'error' && (
+            <div className="error-message">
+              {errorMessage}
+            </div>
+          )}
+
+          {examStatus === 'success' && generatedData && (
+            <div className="success-section">
+              <div className="success-message">
+                🎉 총 {generatedData.totalQs}문항 출제가 완료되었습니다! 아래 두 파일을 모두 다운로드하세요.
+              </div>
+              <div className="download-buttons">
+                <button className="download-btn primary" onClick={downloadDocx}>
+                  📄 1. 문제지 다운로드 (.docx)
+                </button>
+                <div className="download-wrapper">
+                  <button className="download-btn secondary" onClick={downloadJson}>
+                    💾 2. 내 세이브 파일 다운로드 (.json)
+                  </button>
+                  <small>※ 다음 번 접속 시 이 파일을 꼭 업로드해주세요!</small>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default App;
