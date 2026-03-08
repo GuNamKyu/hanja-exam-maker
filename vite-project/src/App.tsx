@@ -22,10 +22,17 @@ function App() {
   const [availableSessions, setAvailableSessions] = useState<number[]>([]);
 
   // Admin Mode State
+  const [adminPassword, setAdminPassword] = useState<string>(() => localStorage.getItem('adminPassword') || '1234');
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [showAdminModal, setShowAdminModal] = useState<boolean>(false);
   const [adminPasswordInput, setAdminPasswordInput] = useState<string>('');
   const [adminError, setAdminError] = useState<string>('');
+  
+  // Change Password State
+  const [showChangePwModal, setShowChangePwModal] = useState<boolean>(false);
+  const [newPassword, setNewPassword] = useState<string>('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState<string>('');
+  const [pwChangeError, setPwChangeError] = useState<string>('');
 
   const historyInputRef = useRef<HTMLInputElement>(null);
   const excelInputRef = useRef<HTMLInputElement>(null);
@@ -175,7 +182,7 @@ function App() {
   };
 
   const handleAdminLogin = () => {
-    if (adminPasswordInput === '1234') {
+    if (adminPasswordInput === adminPassword) {
       setIsAdmin(true);
       setShowAdminModal(false);
       setAdminPasswordInput('');
@@ -190,7 +197,22 @@ function App() {
       setIsAdmin(false);
     } else {
       setShowAdminModal(true);
+      setAdminPasswordInput('');
+      setAdminError('');
     }
+  };
+
+  const handleChangePassword = () => {
+    if (!newPassword || newPassword !== confirmNewPassword) {
+      setPwChangeError('입력한 암호가 일치하지 않거나 비어있습니다.');
+      return;
+    }
+    localStorage.setItem('adminPassword', newPassword);
+    setAdminPassword(newPassword);
+    setShowChangePwModal(false);
+    setNewPassword('');
+    setConfirmNewPassword('');
+    setPwChangeError('');
   };
 
   return (
@@ -203,9 +225,24 @@ function App() {
             <strong>기존에 풀었던 문제와 중복되지 않도록, 본인의 '세이브 파일(.json)'을 꼭 업로드해주세요!</strong>
             <br/>(처음 오신 분은 업로드 없이 바로 '모의고사 생성 시작'을 누르시면 됩니다.)
           </p>
-          <button className="admin-toggle-btn" onClick={toggleAdminMode}>
-            {isAdmin ? '🔓 관리자 모드 종료' : '🔒 관리자 로그인'}
-          </button>
+          <div className="admin-actions">
+            {isAdmin && (
+              <button 
+                className="icon-btn" 
+                title="암호 변경" 
+                onClick={() => setShowChangePwModal(true)}
+              >
+                🔑
+              </button>
+            )}
+            <button 
+              className="icon-btn" 
+              title={isAdmin ? "관리자 모드 종료" : "관리자 로그인"} 
+              onClick={toggleAdminMode}
+            >
+              {isAdmin ? '🔓' : '🔒'}
+            </button>
+          </div>
         </header>
 
         <div className="content">
@@ -353,6 +390,44 @@ function App() {
             <div className="modal-actions">
               <button className="modal-btn cancel" onClick={() => setShowAdminModal(false)}>취소</button>
               <button className="modal-btn confirm" onClick={handleAdminLogin}>확인</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showChangePwModal && (
+        <div className="modal-overlay" onClick={() => setShowChangePwModal(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <h3>🔑 관리자 암호 변경</h3>
+            <p style={{ marginBottom: '15px', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+              새로운 관리자 암호를 설정하세요. (초기: 1234)
+            </p>
+            <input 
+              type="password" 
+              placeholder="새 암호" 
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              style={{ marginBottom: '10px' }}
+              autoFocus
+            />
+            <input 
+              type="password" 
+              placeholder="새 암호 확인" 
+              value={confirmNewPassword}
+              onChange={(e) => setConfirmNewPassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleChangePassword();
+              }}
+            />
+            {pwChangeError && <p style={{ color: 'var(--error-color)', fontSize: '0.85rem', marginBottom: '15px' }}>{pwChangeError}</p>}
+            <div className="modal-actions">
+              <button className="modal-btn cancel" onClick={() => {
+                setShowChangePwModal(false);
+                setPwChangeError('');
+                setNewPassword('');
+                setConfirmNewPassword('');
+              }}>취소</button>
+              <button className="modal-btn confirm" onClick={handleChangePassword}>변경 저장</button>
             </div>
           </div>
         </div>
