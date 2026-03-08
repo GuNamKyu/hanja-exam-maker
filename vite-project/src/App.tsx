@@ -21,6 +21,12 @@ function App() {
   const [endSession, setEndSession] = useState<string>('');
   const [availableSessions, setAvailableSessions] = useState<number[]>([]);
 
+  // Admin Mode State
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [showAdminModal, setShowAdminModal] = useState<boolean>(false);
+  const [adminPasswordInput, setAdminPasswordInput] = useState<string>('');
+  const [adminError, setAdminError] = useState<string>('');
+
   const historyInputRef = useRef<HTMLInputElement>(null);
   const excelInputRef = useRef<HTMLInputElement>(null);
 
@@ -168,6 +174,25 @@ function App() {
     saveAs(generatedData.jsonBlob, "exam_history.json");
   };
 
+  const handleAdminLogin = () => {
+    if (adminPasswordInput === '1234') {
+      setIsAdmin(true);
+      setShowAdminModal(false);
+      setAdminPasswordInput('');
+      setAdminError('');
+    } else {
+      setAdminError('암호가 틀렸습니다.');
+    }
+  };
+
+  const toggleAdminMode = () => {
+    if (isAdmin) {
+      setIsAdmin(false);
+    } else {
+      setShowAdminModal(true);
+    }
+  };
+
   return (
     <div className="app-container">
       <div className="glass-card">
@@ -178,29 +203,34 @@ function App() {
             <strong>기존에 풀었던 문제와 중복되지 않도록, 본인의 '세이브 파일(.json)'을 꼭 업로드해주세요!</strong>
             <br/>(처음 오신 분은 업로드 없이 바로 '모의고사 생성 시작'을 누르시면 됩니다.)
           </p>
+          <button className="admin-toggle-btn" onClick={toggleAdminMode}>
+            {isAdmin ? '🔓 관리자 모드 종료' : '🔒 관리자 로그인'}
+          </button>
         </header>
 
         <div className="content">
-          <div className="upload-container" onClick={() => excelInputRef.current?.click()} style={{ borderColor: excelFileName ? 'var(--primary-color)' : '' }}>
-            <input 
-              type="file" 
-              accept=".xlsx,.xls" 
-              ref={excelInputRef} 
-              onChange={handleExcelUpload} 
-              style={{ display: 'none' }} 
-            />
-            {excelFileName ? (
-              <div className="upload-success">
-                <span className="icon">📊</span>
-                <p>{excelFileName} 엑셀 로드 완료!</p>
-              </div>
-            ) : (
-              <div className="upload-prompt">
-                <span className="icon">📊</span>
-                <p>원본 문제 은행 엑셀 파일 (.xlsx) 업로드<br/><span style={{ color: "var(--error-color)", fontSize: "0.85rem" }}>*필수</span></p>
-              </div>
-            )}
-          </div>
+          {isAdmin && (
+            <div className="upload-container" onClick={() => excelInputRef.current?.click()} style={{ borderColor: excelFileName ? 'var(--primary-color)' : '' }}>
+              <input 
+                type="file" 
+                accept=".xlsx,.xls" 
+                ref={excelInputRef} 
+                onChange={handleExcelUpload} 
+                style={{ display: 'none' }} 
+              />
+              {excelFileName ? (
+                <div className="upload-success">
+                  <span className="icon">📊</span>
+                  <p>{excelFileName} 엑셀 로드 완료!</p>
+                </div>
+              ) : (
+                <div className="upload-prompt">
+                  <span className="icon">📊</span>
+                  <p>원본 문제 은행 엑셀 파일 (.xlsx) 업로드<br/><span style={{ color: "var(--error-color)", fontSize: "0.85rem" }}>*필수</span></p>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="upload-container" onClick={() => historyInputRef.current?.click()} style={{ opacity: 0.8 }}>
             <input 
@@ -301,6 +331,32 @@ function App() {
           )}
         </div>
       </div>
+
+      {showAdminModal && (
+        <div className="modal-overlay" onClick={() => setShowAdminModal(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <h3>🔒 관리자 암호 입력</h3>
+            <p style={{ marginBottom: '15px', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+              엑셀 업로드 기능을 활성화하려면 암호를 입력하세요.
+            </p>
+            <input 
+              type="password" 
+              placeholder="암호 입력" 
+              value={adminPasswordInput}
+              onChange={(e) => setAdminPasswordInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleAdminLogin();
+              }}
+              autoFocus
+            />
+            {adminError && <p style={{ color: 'var(--error-color)', fontSize: '0.85rem', marginBottom: '15px' }}>{adminError}</p>}
+            <div className="modal-actions">
+              <button className="modal-btn cancel" onClick={() => setShowAdminModal(false)}>취소</button>
+              <button className="modal-btn confirm" onClick={handleAdminLogin}>확인</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
