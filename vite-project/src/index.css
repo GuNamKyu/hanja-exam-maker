@@ -235,6 +235,81 @@ body {
   background: #e2e8f0;
 }
 
+.session-limits-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: rgba(255, 255, 255, 0.6);
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  flex-wrap: wrap;
+}
+
+.session-input-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.session-input-wrapper label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-main);
+  text-align: center;
+}
+
+.session-input-wrapper select {
+  width: 110px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e0;
+  font-size: 1rem;
+  text-align: center;
+  outline: none;
+  transition: var(--transition);
+  background-color: white;
+  appearance: none;
+  cursor: pointer;
+}
+
+.session-input-wrapper select:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.2);
+}
+
+.session-divider {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: #a0aec0;
+  margin-top: 22px; /* label 높이만큼 보정 */
+}
+
+.session-summary-box {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 12px;
+  background: rgba(248, 250, 252, 0.8);
+  border-radius: 8px;
+  border: 1px dashed #cbd5e0;
+}
+
+.session-summary-box p {
+  font-size: 0.95rem;
+  color: var(--text-main);
+  margin: 0;
+}
+
+.session-summary-box .highlight {
+  color: var(--primary-color);
+  font-weight: 700;
+}
+
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }

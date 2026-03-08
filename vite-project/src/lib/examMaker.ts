@@ -26,7 +26,12 @@ function sampleSize<T>(array: T[], n: number): T[] {
   return result.slice(0, n);
 }
 
-export async function generateExamData(parsedData: Record<string, string[][]>, historyLog: HistoryLog): Promise<{ examData: ExamSectionData[], updatedHistory: HistoryLog }> {
+export interface GenerateExamOptions {
+  startSession?: number;
+  endSession?: number;
+}
+
+export async function generateExamData(parsedData: Record<string, string[][]>, historyLog: HistoryLog, options?: GenerateExamOptions): Promise<{ examData: ExamSectionData[], updatedHistory: HistoryLog }> {
   const examData: ExamSectionData[] = [];
   const updatedHistory: HistoryLog = JSON.parse(JSON.stringify(historyLog));
 
@@ -52,6 +57,16 @@ export async function generateExamData(parsedData: Record<string, string[][]>, h
 
     for (const row of dataRows) {
       if (row.length <= qCol) continue;
+      
+      // Filter by session limits if provided (Session number is usually at index 1)
+      if (options?.startSession || options?.endSession) {
+        const sessionVal = parseInt(row[1], 10);
+        if (!isNaN(sessionVal)) {
+          if (options.startSession && sessionVal < options.startSession) continue;
+          if (options.endSession && sessionVal > options.endSession) continue;
+        }
+      }
+
       if (section.filter && !section.filter(row)) continue;
 
       const qVal = (row[qCol] || '').trim();

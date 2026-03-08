@@ -15,6 +15,11 @@ function App() {
   const [examStatus, setExamStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
   const [generatedData, setGeneratedData] = useState<{ docxBlob: Blob, jsonBlob: Blob, totalQs: number } | null>(null);
+  
+  // Session Limits State
+  const [startSession, setStartSession] = useState<string>('');
+  const [endSession, setEndSession] = useState<string>('');
+  const [availableSessions, setAvailableSessions] = useState<number[]>([]);
 
   const historyInputRef = useRef<HTMLInputElement>(null);
   const excelInputRef = useRef<HTMLInputElement>(null);
@@ -29,13 +34,26 @@ function App() {
         const workbook = XLSX.read(data, { type: 'array' });
         
         const parsedData: Record<string, string[][]> = {};
+        const sessions = new Set<number>();
+        
         for (const sheetName of workbook.SheetNames) {
           const worksheet = workbook.Sheets[sheetName];
-          parsedData[sheetName] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+          const sheetData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" }) as string[][];
+          parsedData[sheetName] = sheetData;
+          
+          if (sheetData.length > 2 && sheetName !== '프롬프트' && sheetName !== '빈출') {
+            for (let i = 2; i < sheetData.length; i++) {
+              if (sheetData[i].length > 1) {
+                const sessionVal = parseInt(sheetData[i][1], 10);
+                if (!isNaN(sessionVal)) sessions.add(sessionVal);
+              }
+            }
+          }
         }
         
         setExcelData(parsedData);
         setExcelFileName("한국어문회 2급 준비.xlsx (기본 제공)");
+        setAvailableSessions(Array.from(sessions).sort((a,b) => a - b));
       } catch (err) {
         console.error("기본 엑셀 파일 로드 실패:", err);
       }
@@ -72,13 +90,26 @@ function App() {
         const workbook = XLSX.read(data, { type: 'array' });
         
         const parsedData: Record<string, string[][]> = {};
+        const sessions = new Set<number>();
+        
         for (const sheetName of workbook.SheetNames) {
           const worksheet = workbook.Sheets[sheetName];
-          parsedData[sheetName] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+          const sheetData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" }) as string[][];
+          parsedData[sheetName] = sheetData;
+          
+          if (sheetData.length > 2 && sheetName !== '프롬프트' && sheetName !== '빈출') {
+            for (let i = 2; i < sheetData.length; i++) {
+              if (sheetData[i].length > 1) {
+                const sessionVal = parseInt(sheetData[i][1], 10);
+                if (!isNaN(sessionVal)) sessions.add(sessionVal);
+              }
+            }
+          }
         }
         
         setExcelData(parsedData);
         setExcelFileName(file.name);
+        setAvailableSessions(Array.from(sessions).sort((a,b) => a - b));
       } catch (err) {
         alert("엑셀 파일 파싱 중 오류가 발생했습니다.");
         setExcelData(null);
@@ -99,7 +130,11 @@ function App() {
     setGeneratedData(null);
 
     try {
-      const { examData, updatedHistory } = await generateExamData(excelData, historyLog);
+      const options = {
+        startSession: startSession ? parseInt(startSession, 10) : undefined,
+        endSession: endSession ? parseInt(endSession, 10) : undefined
+      };
+      const { examData, updatedHistory } = await generateExamData(excelData, historyLog, options);
 
       const totalItems = examData.reduce((acc, sec) => acc + sec.items.length, 0);
       if (totalItems === 0) {
@@ -186,6 +221,50 @@ function App() {
                 <p>내 출제 기록 파일 (exam_history.json) 업로드<br/>(선택사항)</p>
               </div>
             )}
+          </div>
+
+          <div className="session-limits-container">
+            <div className="session-input-wrapper">
+              <label htmlFor="startSession">시작 회차</label>
+              <select 
+                id="startSession"
+                value={startSession} 
+                onChange={(e) => setStartSession(e.target.value)} 
+              >
+                <option value="">처음부터</option>
+                {availableSessions.map(s => (
+                  <option key={`start-${s}`} value={s}>{s}회</option>
+                ))}
+              </select>
+            </div>
+            <div className="session-divider">~</div>
+            <div className="session-input-wrapper">
+              <label htmlFor="endSession">종료 회차</label>
+              <select 
+                id="endSession"
+                value={endSession} 
+                onChange={(e) => setEndSession(e.target.value)}
+              >
+                <option value="">끝까지</option>
+                {availableSessions.map(s => (
+                  <option key={`end-${s}`} value={s}>{s}회</option>
+                ))}
+              </select>
+            </div>
+            
+            <div className="session-summary-box">
+              <span className="info-icon">💡</span>
+              <p>
+                <strong>선택된 출제 범위:</strong>{' '}
+                {startSession || endSession ? (
+                  <span className="highlight">
+                    {startSession ? `${startSession}회` : '처음'} 부터 {endSession ? `${endSession}회` : '끝'} 까지
+                  </span>
+                ) : (
+                  <span>전체 기출문제</span>
+                )}
+              </p>
+            </div>
           </div>
 
           <button 
