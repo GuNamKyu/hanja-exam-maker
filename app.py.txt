@@ -1,0 +1,265 @@
+import streamlit as st
+import gspread
+from google.oauth2.service_account import Credentials
+from docx import Document
+from docx.shared import Pt, Cm, Mm
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+import random
+import re
+import json
+import io
+from datetime import datetime
+
+# =========================================================
+# 1. 웹페이지 기본 설정
+# =========================================================
+st.set_page_config(page_title="한자 모의고사 자동 출제기", page_icon="📝", layout="centered")
+
+# 🚨 본인 구글 시트 주소 (변동 없음)
+TARGET_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1e-0h0eTxTdPsgqv2JdsPegt-Hv_nh-AwrdGOkG9I66U/edit?gid=1570103200#gid=1570103200'
+
+EXAM_SECTIONS = [
+    {'sheet': '부수', 'count': 5, 'title': '다음 漢字의 部首(부수)를 쓰시오.', 'q_idx': 2, 'a_idx': 4, 'dedup_idx': 2, 'fmt': lambda q, d: f"{q}"},
+    {'sheet': '약자', 'count': 3, 'title': '다음 漢字의 略字(약자)를 쓰시오.', 'q_idx': 2, 'a_idx': 4, 'dedup_idx': 2, 'fmt': lambda q, d: f"{q}"},
+    {'sheet': '유의어/반의어/상대어', 'count': 5, 'title': '다음 漢字와 비슷한 뜻을 가진 漢字[正字]를 ( ) 안에 써넣으시오.', 'q_idx': 3, 'a_idx': 5, 'dedup_idx': 3, 'filter': lambda row: '유의어' in (row[2] if len(row)>2 else ''), 'fmt': lambda q, d: f"{q}"},
+    {'sheet': '유의어/반의어/상대어', 'count': 5, 'title': '다음 漢字와 뜻이 反對 또는 相對되는 漢字[正字]를 써서 漢字語를 완성하시오.', 'q_idx': 3, 'a_idx': 5, 'dedup_idx': 3, 'filter': lambda row: (('반의어' in (row[2] if len(row)>2 else '') or '상대어' in (row[2] if len(row)>2 else '')) and '↔' not in (row[3] if len(row)>3 else '')), 'fmt': lambda q, d: f"{q}"},
+    {'sheet': '유의어/반의어/상대어', 'count': 5, 'title': '다음 漢字語의 反義語 또는 相對語를 2음절로 된 漢字[正字]로 쓰시오.', 'q_idx': 3, 'a_idx': 5, 'dedup_idx': 3, 'filter': lambda row: (('반의어' in (row[2] if len(row)>2 else '') or '상대어' in (row[2] if len(row)>2 else '')) and '↔' in (row[3] if len(row)>3 else '')), 'fmt': lambda q, d: f"{q}"},
+    {'sheet': '뜻풀이', 'count': 5, 'title': '다음 漢字語의 뜻을 쓰시오.', 'q_idx': 2, 'a_idx': 4, 'dedup_idx': 2, 'fmt': lambda q, d: f"{q}"},
+    {'sheet': '같은 음 단어', 'count': 5, 'title': '다음 ( )안의 단어와 음이 같은 同音異義語를 쓰시오.', 'q_idx': 2, 'd_idx': 3, 'a_idx': 4, 'dedup_idx': 2, 'fmt': lambda q, d: f"{q} - {d}" if d else q},
+    {'sheet': '사자성어', 'count': 10, 'title': '다음 ( ) 안에 알맞은 漢字를 써서 四字成語를 완성하시오.', 'q_idx': 2, 'a_idx': 3, 'dedup_idx': 2, 'fmt': lambda q, d: f"{q}"},
+    {'sheet': '쓰기', 'count': 30, 'title': '다음 밑줄 친 단어를 漢字(정자)로 쓰시오.', 'q_idx': 2, 'd_idx': 3, 'a_idx': 3, 'dedup_idx': 2, 'fmt': lambda q, d: f"{q}"}
+]
+
+# =========================================================
+# 2. 핵심 로직
+# =========================================================
+@st.cache_resource # 구글 인증을 한 번만 하도록 캐싱
+def get_google_client():
+    scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+    return gspread.authorize(creds)
+
+def fetch_and_parse_data(client, sheet_url, sections, history_log):
+    sh = client.open_by_url(sheet_url)
+    exam_data = []
+    
+    # 원본 history_log를 손상시키지 않고 복사해서 업데이트 진행
+    updated_history = json.loads(json.dumps(history_log)) 
+
+    for section in sections:
+        sheet_name = section['sheet']
+        past_questions_log = set(updated_history.get(sheet_name, []))
+
+        try:
+            ws = sh.worksheet(sheet_name)
+            raw_data = ws.get_all_values()
+            if len(raw_data) < 3: continue
+            data_rows = list(enumerate(raw_data, start=1))[2:]
+
+            unique_candidates = []
+            seen_in_this_session = set()
+
+            q_col = section['q_idx']
+            a_col = section.get('a_idx') 
+            dedup_col = section.get('dedup_idx', q_col)
+
+            for row_idx, row in data_rows:
+                if len(row) <= q_col: continue
+                # 🛑 [주의] 이제 시트의 'O' 표시는 완전히 무시합니다. 오직 JSON 세이브 파일만 믿습니다.
+                
+                if 'filter' in section and not section['filter'](row): continue
+
+                q_val = row[q_col].strip()
+                if not q_val or q_val in ["문제", "한자", "단어"]: continue
+
+                # 키(Key) 생성 로직 (사자성어/유의어 정렬 처리)
+                if sheet_name in ['사자성어', '유의어/반의어/상대어']:
+                    a_val = row[a_col].strip() if a_col and len(row) > a_col else ""
+                    combined_text = q_val + a_val
+                    hanjas = re.findall(r'[\u4e00-\u9fff]', combined_text)
+                    if hanjas: k_val = "".join(sorted(set(hanjas)))
+                    else: k_val = q_val
+                elif sheet_name == '같은 음 단어':
+                    k_val = row[dedup_col].strip().split('-')[0].strip() if len(row) > dedup_col else q_val.split('-')[0].strip()
+                else:
+                    k_val = row[dedup_col].strip() if len(row) > dedup_col else q_val
+                    if not k_val: k_val = q_val
+
+                # JSON 세이브 파일에 이미 풀었던 문제면 패스
+                if k_val in past_questions_log: continue
+                # 이번에 뽑은 문제 목록에 있으면 패스
+                if k_val in seen_in_this_session: continue
+
+                seen_in_this_session.add(k_val)
+                unique_candidates.append({'data': row, 'key': k_val})
+
+            if len(unique_candidates) < section['count']:
+                selected_items = unique_candidates
+            else:
+                selected_items = random.sample(unique_candidates, section['count'])
+
+            items = []
+            if sheet_name not in updated_history: updated_history[sheet_name] = []
+
+            for item in selected_items:
+                row = item['data']
+                q_text = row[section['q_idx']].strip()
+                d_text = row[section.get('d_idx')].strip() if section.get('d_idx') and len(row) > section.get('d_idx') else ""
+                
+                if section['fmt'].__code__.co_argcount == 2:
+                    formatted_q = section['fmt'](q_text, d_text)
+                else: formatted_q = section['fmt'](q_text)
+                
+                a_text = row[section.get('a_idx')].strip() if section.get('a_idx') and len(row) > section.get('a_idx') else ""
+                items.append({'q': formatted_q, 'a': a_text})
+
+                # 세이브 파일 데이터 업데이트
+                updated_history[sheet_name].append(item['key'])
+
+            exam_data.append({'title': section['title'], 'items': items})
+
+        except Exception as e:
+            st.warning(f"[{sheet_name}] 데이터 추출 중 에러: {e}")
+
+    return exam_data, updated_history
+
+# =========================================================
+# 3. 문서 생성 (메모리 저장)
+# =========================================================
+def set_font(run, font_name='Batang', size_pt=11):
+    run.font.name = font_name
+    run.font.size = Pt(size_pt)
+    r = run._element
+    rPr = r.get_or_add_rPr()
+    fonts = OxmlElement('w:rFonts')
+    fonts.set(qn('w:eastAsia'), font_name)
+    fonts.set(qn('w:ascii'), font_name)
+    rPr.append(fonts)
+
+def set_section_columns(section):
+    sectPr = section._sectPr
+    cols = sectPr.xpath('./w:cols')[0]
+    cols.set(qn('w:num'), '2')
+    cols.set(qn('w:sep'), '1')
+    cols.set(qn('w:space'), '720')
+
+def create_docx_in_memory(exam_data):
+    doc = Document()
+    title_para = doc.add_paragraph()
+    title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = title_para.add_run("전국한자능력검정시험 2급 [실전 모의고사]")
+    set_font(run, size_pt=16); run.bold = True
+
+    info_table = doc.add_table(rows=1, cols=2); info_table.width = Cm(18)
+    p1 = info_table.cell(0, 0).paragraphs[0]; r1 = p1.add_run(" 성명 : (                  )"); set_font(r1)
+    p2 = info_table.cell(0, 1).paragraphs[0]; p2.alignment = WD_ALIGN_PARAGRAPH.RIGHT; r2 = p2.add_run("수험번호 : (                  ) "); set_font(r2)
+    doc.add_paragraph()
+
+    section = doc.add_section(0); set_section_columns(section)
+    section.top_margin = Cm(2); section.bottom_margin = Cm(2)
+    section.left_margin = Cm(1.5); section.right_margin = Cm(1.5)
+
+    q_global_num = 1
+    all_answers = []
+
+    for section_data in exam_data:
+        items = section_data['items']
+        if not items: continue
+        start_n = q_global_num
+        end_n = q_global_num + len(items) - 1
+        p_header = doc.add_paragraph()
+        p_header.paragraph_format.space_before = Pt(14); p_header.paragraph_format.space_after = Pt(4); p_header.paragraph_format.keep_with_next = True
+        run_header = p_header.add_run(f"[問 {start_n}-{end_n}] {section_data['title']}")
+        set_font(run_header, size_pt=10); run_header.bold = True
+
+        for item in items:
+            p_q = doc.add_paragraph(); p_q.paragraph_format.line_spacing = 1.5; p_q.paragraph_format.space_after = Pt(2)
+            p_q.paragraph_format.left_indent = Mm(7); p_q.paragraph_format.first_line_indent = Mm(-7)
+            run_q = p_q.add_run(f"[{q_global_num}] {item['q']}"); set_font(run_q)
+            all_answers.append({'num': q_global_num, 'ans': item['a']}); q_global_num += 1
+        doc.add_paragraph().paragraph_format.space_after = Pt(6)
+
+    doc.add_page_break()
+    p_ans_title = doc.add_paragraph(); p_ans_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r_ans = p_ans_title.add_run("― 正 答 表 (정답표) ―"); set_font(r_ans, size_pt=14); r_ans.bold = True
+    p_ans_title.paragraph_format.space_after = Pt(12)
+
+    for ans in all_answers:
+        p_a = doc.add_paragraph(); p_a.paragraph_format.line_spacing = 1.3
+        p_a.paragraph_format.left_indent = Mm(8); p_a.paragraph_format.first_line_indent = Mm(-8)
+        run_a = p_a.add_run(f"[{ans['num']}] {ans['ans']}"); set_font(run_a, size_pt=10)
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer, q_global_num - 1
+
+# =========================================================
+# 4. Streamlit 화면 UI 구성
+# =========================================================
+st.title("📝 2급 한자 모의고사 생성기")
+st.markdown("""
+이곳은 개인 맞춤형 한자 모의고사를 만들어주는 시스템입니다.  
+**기존에 풀었던 문제와 중복되지 않도록, 본인의 '세이브 파일(.json)'을 꼭 업로드해주세요!** (처음 오신 분은 업로드 없이 바로 '모의고사 생성 시작'을 누르시면 됩니다.)
+""")
+
+st.divider()
+
+# 1. 파일 업로드 UI
+uploaded_file = st.file_uploader("📂 내 출제 기록 파일 (exam_history.json) 업로드", type="json")
+
+# 2. 실행 버튼
+if st.button("🚀 모의고사 생성 시작", type="primary"):
+    
+    # 업로드된 파일이 있으면 읽고, 없으면 빈 딕셔너리로 시작
+    user_history = {}
+    if uploaded_file is not None:
+        try:
+            user_history = json.load(uploaded_file)
+            st.success("세이브 파일을 성공적으로 불러왔습니다! 이어서 출제합니다.")
+        except:
+            st.error("잘못된 파일 형식입니다. 처음부터 다시 출제합니다.")
+
+    with st.spinner('구글 시트 문제 은행에서 새로운 문제를 선별하고 있습니다...'):
+        try:
+            client = get_google_client()
+            
+            # 문제 뽑기 및 새로운 세이브 데이터 생성 (시트 마킹 안 함)
+            data, new_user_history = fetch_and_parse_data(client, TARGET_SHEET_URL, EXAM_SECTIONS, user_history)
+            
+            if not data or sum(len(sec['items']) for sec in data) == 0:
+                st.warning("축하합니다! 문제 은행의 모든 문제를 다 푸셨습니다. 더 이상 새로운 문제가 없습니다.")
+            else:
+                st.info("시험지를 구성하고 있습니다...")
+                docx_buffer, total_qs = create_docx_in_memory(data)
+                
+                # 새로운 세이브 파일을 다운로드할 수 있도록 바이트 변환
+                json_bytes = json.dumps(new_user_history, ensure_ascii=False, indent=4).encode('utf-8')
+                
+                st.success(f"🎉 총 {total_qs}문항 출제가 완료되었습니다! 아래 두 파일을 모두 다운로드하세요.")
+                
+                # 3. 다운로드 버튼 2개 나란히 배치
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    filename_docx = f"한자모의고사_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
+                    st.download_button(
+                        label="📄 1. 문제지 다운로드 (.docx)",
+                        data=docx_buffer,
+                        file_name=filename_docx,
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    )
+                
+                with col2:
+                    st.download_button(
+                        label="💾 2. 내 세이브 파일 다운로드 (.json)",
+                        data=json_bytes,
+                        file_name="exam_history.json",
+                        mime="application/json"
+                    )
+                    st.caption("※ 다음 번 접속 시 이 파일을 꼭 업로드해주세요!")
+
+        except Exception as e:
+            st.error(f"오류가 발생했습니다: {e}")
